@@ -95,8 +95,8 @@ CSV.open('books.csv', 'w') do |csv|
 end
 
 CSV.open('readings.csv', 'w') do |csv|
-  csv << ['id', 'pages', 'book_id']
+  csv << ['id', 'pages', 'week', 'book_id']
   Reading.all.each do |reading|
-    csv << [reading.id, reading.pages, reading.book_id]
+    csv << [reading.id, reading.pages, reading.week, reading.book_id]
   end
 end
