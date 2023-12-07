@@ -1,135 +1,102 @@
 #!/usr/bin/env ruby
 
 require 'csv'
+require 'active_record'
+csv_path = 'ogb.csv'
 
-class Book
-  @@next_id = 1
-  @@books = []
-  
-  def self.all
-    @@books
+# In-memory SQLite database for ActiveRecord
+ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
+
+# Migrations to create tables
+ActiveRecord::Schema.define do
+  create_table :seminars do |t|
+    t.string :date
   end
 
-  def self.find_or_create_by(title:, isbn:)
-    book = @@books.find {|b| b.title == title }
-    if book.nil?
-      book = Book.new(title: title, isbn: isbn)
-      @@books << book
-    end
-    book
+  create_table :books do |t|
+    t.string :title
+    t.string :isbn
+    t.belongs_to :seminar, index: true
   end
 
-  attr_accessor :id, :title, :isbn
-  
-  def initialize(title:, isbn:)
-    @id = @@next_id
-    @@next_id += 1
-    @title = title
-    @isbn = isbn
+  create_table :readings do |t|
+    t.string :week
+    t.string :pages
+    t.belongs_to :book, index: true
   end
 end
 
-class Reading
-  @@next_id = 1
-  @@readings = []
-  
-  def self.all
-    @@readings
-  end
-
-  def self.create(pages:, week:, book:)
-    reading = Reading.new(pages: pages, week: week, book: book)
-    @@readings << reading
-    reading
-  end
-
-  attr_accessor :id, :pages, :week, :book
-  
-  def initialize(pages:, week:, book:)
-    @id = @@next_id
-    @@next_id += 1
-    @pages = pages
-    @week = week
-    @book = book
-  end
+class Seminar < ActiveRecord::Base
+  has_many :books
 end
 
-class Seminar 
-  @@next_id = 1
-  @@seminars = []
-
-  def self.all
-    @@seminars
-  end
-
-  def self.find_or_create_by(date:)
-    seminar = @@seminars.find {|s| s.date == date} 
-    if seminar.nil?
-      seminar = Seminar.new(date: date)
-      @@seminars << seminar
-    end
-    seminar
-  end
-
-  attr_accessor :id, :date
-
-  def initialize(date:)
-    @id = @@next_id
-    @@next_id += 1
-    @date = date 
-  end
+class Book < ActiveRecord::Base
+  belongs_to :seminar
+  has_many :readings
 end
 
-CSV.foreach('ogb.csv', headers: true) do |row|
-  
-  if !row['Book'].nil? && !row['ISBN'].nil?
-    book = Book.find_or_create_by(title: row['Book'], isbn: row['ISBN'])
-  end
+class Reading < ActiveRecord::Base
+  belongs_to :book
+end
 
-  if !row['Pages'].nil? && !row['Week'].nil? && !book.nil?
-    reading =Reading.create(
-      pages: row['Pages'], 
-      week: row['Week'],
-      book: book
-    )
-  end
+CSV.foreach(csv_path, headers: true) do |row|
+  next if row['Seminar'].nil?
 
-  if !row['Seminar'].nil? 
-    date = Date.parse(row['Seminar'])
-    seminar = Seminar.find_or_create_by(date: date)
-    if !book.nil?
-      book.seminar = seminar
+  Seminar.find_or_create_by(date: row['Seminar'])
+end
+
+last_books = []
+last_book = nil
+
+CSV.foreach(csv_path, headers: true) do |row|
+  if !row['Book'].nil?
+    if Book.find_by(title: row['Book']).nil?
+      last_book = Book.create(title: row['Book'], isbn: row['ISBN'])
+    else
+      last_book = Book.find_by(title: row['Book'])
+      if !row['ISBN'].nil?
+        last_book.isbn = row['ISBN']
+        last_book.save
+      end
     end
   end
 
-  if !row['Seminar'].nil? && !reading.nil?
-    date = Date.parse(row['Seminar'])
-    seminar = Seminar.find_or_create_by(date: date)
-    reading.seminar = seminar
+  if !last_book.nil? && !row['Week'].nil? && !row['Pages'].nil?
+    last_book.readings.create(week: row['Week'], pages: row['Pages'])
   end
 
-end
+  if row['Seminar'].nil? && !last_book.nil? && !last_books.include?(last_book)
+    last_books << last_book
+  end
 
-# Export normalized data
-CSV.open('books.csv', 'w') do |csv|
-  csv << ['id', 'title', 'isbn']
-  Book.all.each do |book|
-    csv << [book.id, book.title, book.isbn]
+  # Potentially more than one book to a seminar
+  if last_books.any? && !row['Seminar'].nil?
+    last_books.each do |book|
+      book.seminar = Seminar.find_by(date: row['Seminar'])
+      book.save
+    end
+
+    last_books = []
   end
 end
 
-# Export readings 
-CSV.open('readings.csv', 'w') do |csv|
-  csv << ['id', 'pages', 'week', 'book_id']
-  Reading.all.each do |reading|
-    csv << [reading.id, reading.pages, reading.week, reading.book.id]
-  end  
-end
-
-# Export seminars
 CSV.open('seminars.csv', 'w') do |csv|
   csv << ['id', 'date']
   Seminar.all.each do |seminar|
     csv << [seminar.id, seminar.date]
+  end
+end
+
+CSV.open('books.csv', 'w') do |csv|
+  csv << ['id', 'title', 'isbn', 'seminar_id']  # Header row
+  Book.all.each do |book|
+    csv << [book.id, book.title, book.isbn, book.seminar_id]
+  end
+end
+
+CSV.open('readings.csv', 'w') do |csv|
+  csv << ['id', 'pages', 'book_id']
+  Reading.all.each do |reading|
+    csv << [reading.id, reading.pages, reading.book_id]
   end
 end
